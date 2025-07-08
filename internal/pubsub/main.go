@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"context"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"log"
+	"fmt"
 )
 
 type SimpleQueueType string
