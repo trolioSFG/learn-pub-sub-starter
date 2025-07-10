@@ -31,9 +31,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	_, _, err = pubsub.DeclareAndBind(conn, "peril_topic", "game_logs", "game_logs.*", pubsub.Durable)
+	err = pubsub.SubscribeGob(conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		routing.GameLogSlug+".*",
+		pubsub.Durable,
+		handlerLog(),
+	)
+
 	if err != nil {
-		fmt.Printf("Error DeclareAndBind game_logs: %v", err)
+		// Falla x-dead-letter-exchange ?
+		// SOLUCION: Eliminar la cola game_logs desde RabbitMQ
+		log.Fatalf("Error DeclareAndBind game_logs: %v", err)
+	} else {
+		fmt.Printf("Queue \"game_logs\" created and bound!")
 	}
 
 	msg := routing.PlayingState {
@@ -94,3 +105,16 @@ func main() {
 	**/
 
 }
+
+func handlerLog() func(routing.GameLog) pubsub.AckType {
+	return func(sl routing.GameLog) pubsub.AckType {
+		defer fmt.Print("> ")
+		err := gamelogic.WriteLog(sl)
+		if err != nil {
+			return pubsub.NackRequeue
+		}
+		return pubsub.Ack
+	}
+}
+
+

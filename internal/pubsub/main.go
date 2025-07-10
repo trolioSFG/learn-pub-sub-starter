@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"context"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"fmt"
+//	"fmt"
+	"encoding/gob"
+	"bytes"
 )
 
 type SimpleQueueType string
@@ -46,8 +48,8 @@ func DeclareAndBind(conn *amqp.Connection, exchange, queueName, key string, queu
 	}
 
 	q, err := ch.QueueDeclare(queueName, queueType == Durable,
-		queueType == Transient,
-		queueType == Transient,
+		queueType != Durable,
+		queueType != Durable,
 		false,
 		amqp.Table { "x-dead-letter-exchange": "peril_dlx", },
 	)
@@ -72,6 +74,7 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, key string
 		return err
 	}
 
+
 	dlvry, err := ch.Consume(q.Name, "", false, false, false, false, nil)
 	if err != nil {
 		return err
@@ -88,13 +91,13 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, key string
 			switch at {
 			case Ack:
 				rawMsg.Ack(false)
-				fmt.Println("Ack")
+				// fmt.Println("Ack")
 			case NackRequeue:
 				rawMsg.Nack(false, true)
-				fmt.Println("Nack Requeue")
+				// fmt.Println("Nack Requeue")
 			case NackDiscard:
 				rawMsg.Nack(false, false)
-				fmt.Println("Nack Discard")
+				// fmt.Println("Nack Discard")
 			}
 		}
 	}()
@@ -102,4 +105,67 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, key string
 	return nil
 }
 
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	var network bytes.Buffer
+	enc := gob.NewEncoder(&network)
+	err := enc.Encode(val)
+
+	msg := amqp.Publishing {
+		ContentType: "application/gob",
+		Body: network.Bytes(),
+	}
+
+	err = ch.PublishWithContext(context.Background(), exchange, key, false, false, msg)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+
+func SubscribeGob[T any](conn *amqp.Connection, exchange, queueName, key string,
+    queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+    handler func(T) AckType) error {
+
+	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	if err != nil {
+		return err
+	}
+
+	// Limit prefetch
+	ch.Qos(10, 0, false)
+
+	dlvry, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		var stLog T 
+		for rawMsg := range dlvry {
+			buf := bytes.NewBuffer(rawMsg.Body)
+			dec := gob.NewDecoder(buf)
+			err := dec.Decode(&stLog) 
+			if err != nil {
+				continue
+			}
+			at := handler(stLog)
+			switch at {
+			case Ack:
+				rawMsg.Ack(false)
+				// fmt.Println("Ack")
+			case NackRequeue:
+				rawMsg.Nack(false, true)
+				// fmt.Println("Nack Requeue")
+			case NackDiscard:
+				rawMsg.Nack(false, false)
+				// fmt.Println("Nack Discard")
+			}
+		}
+	}()
+
+	return nil
+}
 
